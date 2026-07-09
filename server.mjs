@@ -113,11 +113,20 @@ function health() {
     localOnly: true,
     dbPath: DB_PATH,
     contactCount: db.prepare("SELECT COUNT(*) AS count FROM contacts").get().count,
+    sourceCounts: {
+      google: sourceCount("google"),
+      gmail: sourceCount("gmail"),
+      linkedin: sourceCount("linkedin")
+    },
     openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
     googleConfigured: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
     googleAuthorized: fs.existsSync(GOOGLE_TOKEN_PATH),
     linkedInProfileDir: LINKEDIN_PROFILE_DIR
   };
+}
+
+function sourceCount(source) {
+  return db.prepare("SELECT COUNT(*) AS count FROM contacts WHERE sources_json LIKE ?").get(`%"${source}":true%`).count;
 }
 
 function listContacts(params) {

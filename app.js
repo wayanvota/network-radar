@@ -103,6 +103,9 @@ const TOPIC_LEXICON = [
 const state = {
   contacts: [],
   serverAvailable: false,
+  serverTotal: 0,
+  serverMatches: 0,
+  serverSourceCounts: { google: 0, linkedin: 0, gmail: 0 },
   query: "digital health Colombia M&E",
   filters: {
     org: "",
@@ -117,6 +120,8 @@ const state = {
 };
 
 const el = {};
+let searchTimer = 0;
+let searchSeq = 0;
 
 document.addEventListener("DOMContentLoaded", async () => {
   bindElements();
@@ -141,7 +146,15 @@ function bindElements() {
 function bindEvents() {
   el.queryInput.addEventListener("input", () => {
     state.query = el.queryInput.value;
-    renderResults();
+    if (!state.serverAvailable) {
+      renderResults();
+      return;
+    }
+    window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(async () => {
+      await loadServerContacts();
+      render();
+    }, 250);
   });
 
   ["orgFilter", "locationFilter", "topicFilter"].forEach((id) => {
@@ -232,14 +245,23 @@ async function handleFiles(event) {
 }
 
 async function loadServerContacts() {
+  const seq = ++searchSeq;
   try {
     const health = await fetchJson("/api/health");
     state.serverAvailable = true;
+    state.serverTotal = health.contactCount || 0;
+    state.serverSourceCounts = health.sourceCounts || state.serverSourceCounts;
     if (el.serverStatus) el.serverStatus.textContent = health.googleAuthorized ? "Google ready" : "Local ready";
-    const data = await fetchJson(`/api/contacts?q=${encodeURIComponent(state.query)}`);
+    const data = await fetchJson(`/api/contacts?q=${encodeURIComponent(state.query)}&limit=200`);
+    if (seq !== searchSeq) return;
     if (data.contacts) state.contacts = data.contacts.map((row) => cleanContact(row.contact));
+    state.serverTotal = data.total || state.serverTotal || state.contacts.length;
+    state.serverMatches = data.matches ?? state.contacts.length;
   } catch {
     state.serverAvailable = false;
+    state.serverTotal = 0;
+    state.serverMatches = 0;
+    state.serverSourceCounts = { google: 0, linkedin: 0, gmail: 0 };
     if (el.serverStatus) el.serverStatus.textContent = "Static only";
   }
 }
@@ -556,17 +578,15 @@ function render() {
 }
 
 function renderCounts() {
-  el.totalCount.textContent = `${state.contacts.length} people`;
-  el.googleCount.textContent = String(state.contacts.filter((c) => c.sources.google).length);
-  el.linkedinCount.textContent = String(state.contacts.filter((c) => c.sources.linkedin).length);
-  el.gmailCount.textContent = String(state.contacts.filter((c) => c.sources.gmail).length);
+  el.totalCount.textContent = `${state.serverAvailable && state.serverTotal ? state.serverTotal : state.contacts.length} people`;
+  el.googleCount.textContent = String(state.serverAvailable ? state.serverSourceCounts.google : state.contacts.filter((c) => c.sources.google).length);
+  el.linkedinCount.textContent = String(state.serverAvailable ? state.serverSourceCounts.linkedin : state.contacts.filter((c) => c.sources.linkedin).length);
+  el.gmailCount.textContent = String(state.serverAvailable ? state.serverSourceCounts.gmail : state.contacts.filter((c) => c.sources.gmail).length);
 }
 
 function renderResults() {
   const scored = getScoredContacts();
-  el.resultSummary.textContent = scored.length
-    ? `${scored.length} matches from ${state.contacts.length} people.`
-    : state.contacts.length ? "No matches. Try loosening the query or filters." : "No contacts loaded yet.";
+  el.resultSummary.textContent = resultSummaryText(scored.length);
   el.resultsList.innerHTML = "";
   scored.slice(0, 120).forEach(({ contact, score }) => {
     const button = document.createElement("button");
@@ -595,6 +615,15 @@ function renderResults() {
     return;
   }
   if (selected) renderDetail(selected, scoreContact(selected, state.query));
+}
+
+function resultSummaryText(visibleCount) {
+  if (!state.contacts.length) return "No contacts loaded yet.";
+  if (!visibleCount) return "No matches. Try loosening the query or filters.";
+  if (state.serverAvailable) {
+    return `${state.serverMatches} database matches from ${state.serverTotal} people. Showing ${visibleCount}.`;
+  }
+  return `${visibleCount} matches from ${state.contacts.length} people.`;
 }
 
 function resultTemplate(contact, score) {
