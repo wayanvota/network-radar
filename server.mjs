@@ -815,6 +815,11 @@ function normalizeLink(link) {
   return String(link || "").replace(/\/$/, "").toLowerCase();
 }
 
+function snippet(text, length = 220) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  return clean.length > length ? `${clean.slice(0, length - 3)}...` : clean;
+}
+
 function toCsv(rows) {
   if (!rows.length) return "";
   const headers = Object.keys(rows[0]);
