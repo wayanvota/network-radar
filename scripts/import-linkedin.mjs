@@ -202,7 +202,7 @@ function mergeContact(incoming) {
     bio: snippet(unique([existing.bio, incoming.bio]).join(" "), 2000),
     notes: [existing.notes, incoming.notes].filter(Boolean).join("\n"),
     tags: unique([...existing.tags, ...incoming.tags, ...inferTags(incoming)]),
-    sources: { ...existing.sources, ...incoming.sources },
+    sources: mergeSources(existing.sources, incoming.sources),
     warmth: mergeWarmth(existing.warmth, incoming.warmth),
     consent: existing.consent === "unknown" ? incoming.consent : existing.consent,
     embedding: existing.embedding?.length ? existing.embedding : incoming.embedding
@@ -270,7 +270,7 @@ function rowToContact(row) {
     bio: row.bio,
     notes: row.notes,
     tags: parseJson(row.tags_json, []),
-    sources: parseJson(row.sources_json, {}),
+    sources: normalizeSources(parseJson(row.sources_json, {})),
     consent: row.consent,
     warmth: parseJson(row.warmth_json, defaultWarmth()),
     embedding: parseJson(row.embedding_json, []),
@@ -320,6 +320,22 @@ function mergeWarmth(a = defaultWarmth(), b = defaultWarmth()) {
       last: latestDate(a.linkedin?.last, b.linkedin?.last)
     },
     contacts: { present: Boolean(a.contacts?.present || b.contacts?.present) }
+  };
+}
+
+function mergeSources(a = {}, b = {}) {
+  return {
+    google: Boolean(a.google || b.google),
+    gmail: Boolean(a.gmail || b.gmail),
+    linkedin: Boolean(a.linkedin || b.linkedin)
+  };
+}
+
+function normalizeSources(sources = {}) {
+  return {
+    google: Boolean(sources.google),
+    gmail: Boolean(sources.gmail),
+    linkedin: Boolean(sources.linkedin)
   };
 }
 
