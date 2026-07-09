@@ -122,12 +122,22 @@ function health() {
 
 function listContacts(params) {
   const q = params.get("q") || "";
-  const rows = db.prepare("SELECT * FROM contacts ORDER BY updated_at DESC").all().map(rowToContact);
+  const limit = Math.min(Number(params.get("limit") || 200), 500);
+  const evidenceMatches = evidenceMatchCounts(q);
+  const rows = db.prepare("SELECT * FROM contacts ORDER BY updated_at DESC").all().map((row) => rowToContact(row, false));
   const scored = rows
-    .map((contact) => ({ contact, score: scoreContact(contact, q), warmth: warmthProfile(contact) }))
+    .map((contact) => ({ contact, score: scoreContact(contact, q, evidenceMatches.get(contact.id) || 0), warmth: warmthProfile(contact) }))
     .filter(({ score }) => !q.trim() || score.fit > 0)
     .sort((a, b) => b.score.fit - a.score.fit || b.warmth.points - a.warmth.points);
-  return { contacts: scored, total: rows.length };
+  return {
+    contacts: scored.slice(0, limit).map((item) => ({
+      ...item,
+      contact: withEvidence(item.contact, 8)
+    })),
+    total: rows.length,
+    matches: scored.length,
+    limit
+  };
 }
 
 function upsertContact(input) {
@@ -157,7 +167,7 @@ function mergeContact(incoming) {
     titles: unique([...existing.titles, ...incoming.titles]),
     locations: unique([...existing.locations, ...incoming.locations]),
     links: unique([...existing.links, ...incoming.links]),
-    bio: [existing.bio, incoming.bio].filter(Boolean).join(" "),
+    bio: snippet([existing.bio, incoming.bio].filter(Boolean).join(" "), 2000),
     notes: [existing.notes, incoming.notes].filter(Boolean).join("\n"),
     tags: unique([...existing.tags, ...incoming.tags, ...inferTags(incoming)]),
     sources: { ...existing.sources, ...incoming.sources },
@@ -171,15 +181,22 @@ function mergeContact(incoming) {
 }
 
 function findExisting(contact) {
-  const candidates = db.prepare("SELECT * FROM contacts").all().map(rowToContact);
-  const emails = new Set(contact.emails.map((email) => email.toLowerCase()));
-  const links = new Set(contact.links.map(normalizeLink));
+  for (const email of contact.emails) {
+    const rows = db.prepare("SELECT * FROM contacts WHERE emails_json LIKE ?").all(`%${email.toLowerCase()}%`).map(rowToContact);
+    const match = rows.find((row) => row.emails.some((candidate) => candidate.toLowerCase() === email.toLowerCase()));
+    if (match) return match;
+  }
+  for (const link of contact.links) {
+    const normalizedLink = normalizeLink(link);
+    if (!normalizedLink) continue;
+    const rows = db.prepare("SELECT * FROM contacts WHERE links_json LIKE ?").all(`%${normalizedLink}%`).map(rowToContact);
+    const match = rows.find((row) => row.links.map(normalizeLink).includes(normalizedLink));
+    if (match) return match;
+  }
   const nameOrg = normalizeText(`${contact.name} ${first(contact.orgs)}`);
-  return candidates.find((candidate) => {
-    if (candidate.emails.some((email) => emails.has(email.toLowerCase()))) return true;
-    if (candidate.links.some((link) => links.has(normalizeLink(link)))) return true;
-    return nameOrg && nameOrg === normalizeText(`${candidate.name} ${first(candidate.orgs)}`);
-  });
+  if (!nameOrg) return null;
+  const rows = db.prepare("SELECT * FROM contacts WHERE name = ?").all(contact.name).map(rowToContact);
+  return rows.find((row) => normalizeText(`${row.name} ${first(row.orgs)}`) === nameOrg) || null;
 }
 
 function writeContact(contact) {
@@ -216,7 +233,7 @@ function getContact(id) {
   return row ? rowToContact(row) : null;
 }
 
-function rowToContact(row) {
+function rowToContact(row, includeEvidence = true) {
   const contact = {
     id: row.id,
     name: row.name,
@@ -236,8 +253,31 @@ function rowToContact(row) {
     shortlisted: Boolean(row.shortlisted),
     updatedAt: row.updated_at
   };
-  contact.evidence = db.prepare("SELECT source, text, created_at FROM evidence WHERE contact_id = ? ORDER BY created_at DESC LIMIT 20").all(contact.id);
+  contact.evidence = includeEvidence ? evidenceForContact(contact.id, 20) : [];
   return contact;
+}
+
+function withEvidence(contact, limit = 20) {
+  return { ...contact, evidence: evidenceForContact(contact.id, limit) };
+}
+
+function evidenceForContact(contactId, limit = 20) {
+  return db.prepare("SELECT source, text, created_at FROM evidence WHERE contact_id = ? ORDER BY created_at DESC LIMIT ?").all(contactId, limit);
+}
+
+function evidenceMatchCounts(query) {
+  const counts = new Map();
+  const terms = unique([normalizeText(query), ...tokenize(query)]).filter(Boolean).slice(0, 8);
+  for (const term of terms) {
+    const rows = db.prepare(`
+      SELECT contact_id, COUNT(*) AS count
+      FROM evidence
+      WHERE lower(text) LIKE ?
+      GROUP BY contact_id
+    `).all(`%${term.toLowerCase()}%`);
+    rows.forEach((row) => counts.set(row.contact_id, (counts.get(row.contact_id) || 0) + Number(row.count || 0)));
+  }
+  return counts;
 }
 
 async function syncGoogleContacts() {
@@ -541,7 +581,7 @@ function exportPublicShortlist(res, params) {
   res.end(csv);
 }
 
-function scoreContact(contact, query) {
+function scoreContact(contact, query, evidenceHits = 0) {
   const terms = tokenize(query);
   if (!terms.length) return { fit: 100, hits: [] };
   const fields = [
@@ -566,6 +606,10 @@ function scoreContact(contact, query) {
       hits.push(`${field}: ${phrase}`);
     }
   });
+  if (evidenceHits > 0) {
+    raw += Math.min(24, evidenceHits * 4);
+    hits.push(`evidence: ${evidenceHits} match${evidenceHits === 1 ? "" : "es"}`);
+  }
   return { fit: Math.min(100, Math.round(raw)), hits: unique(hits).slice(0, 12) };
 }
 

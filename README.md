@@ -95,6 +95,14 @@ Scopes requested:
 
 LinkedIn does not provide a normal personal network API for this use case. Network Radar uses a local, visible browser profile instead.
 
+To import a LinkedIn data export directly:
+
+```bash
+npm run import:linkedin -- \
+  --connections /path/to/Connections.csv \
+  --messages /path/to/messages.csv
+```
+
 Run:
 
 ```bash

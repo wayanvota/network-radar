@@ -237,7 +237,7 @@ async function loadServerContacts() {
     state.serverAvailable = true;
     if (el.serverStatus) el.serverStatus.textContent = health.googleAuthorized ? "Google ready" : "Local ready";
     const data = await fetchJson(`/api/contacts?q=${encodeURIComponent(state.query)}`);
-    if (data.contacts?.length) state.contacts = data.contacts.map((row) => cleanContact(row.contact));
+    if (data.contacts) state.contacts = data.contacts.map((row) => cleanContact(row.contact));
   } catch {
     state.serverAvailable = false;
     if (el.serverStatus) el.serverStatus.textContent = "Static only";
