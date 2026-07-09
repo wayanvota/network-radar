@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Network Radar</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="mark">NR</div>
+          <div>
+            <h1>Network Radar</h1>
+            <p>Local-first search for people, organizations, interests, and places.</p>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button id="googleAuthBtn" class="button secondary" type="button">Authorize Google</button>
+          <button id="openToolsBtn" class="button secondary" type="button">Tools</button>
+          <button id="loadSampleBtn" class="button secondary" type="button">Load Sample</button>
+          <button id="exportDbBtn" class="button secondary" type="button">Export Data</button>
+          <button id="clearBtn" class="button danger" type="button">Clear</button>
+        </div>
+      </header>
+
+      <section class="search-row" aria-label="Search controls">
+        <label class="search-box">
+          <span>Search people, organizations, interests, places</span>
+          <input id="queryInput" type="search" autocomplete="off" value="digital health Colombia M&E" />
+        </label>
+        <button id="saveSearchBtn" class="button primary" type="button">Save Shortlist</button>
+      </section>
+
+      <section class="workspace">
+        <aside class="sidebar">
+          <section class="panel source-panel">
+            <div class="panel-title">
+              <h2>Sources</h2>
+              <span id="totalCount">0 people</span>
+            </div>
+            <button class="source-card" data-import="contacts" type="button">
+              <span class="source-name">Google Contacts</span>
+              <span id="googleCount" class="source-count">0</span>
+              <small>CSV or vCard export</small>
+            </button>
+            <button class="source-card" data-import="linkedin" type="button">
+              <span class="source-name">LinkedIn</span>
+              <span id="linkedinCount" class="source-count">0</span>
+              <small>Connections or messages CSV</small>
+            </button>
+            <button class="source-card" data-import="gmail" type="button">
+              <span class="source-name">Gmail</span>
+              <span id="gmailCount" class="source-count">0</span>
+              <small>Takeout MBOX or text export</small>
+            </button>
+            <input id="fileInput" type="file" multiple hidden />
+          </section>
+
+          <section id="toolsPanel" class="panel tools-panel" hidden>
+            <div class="panel-title">
+              <h2>Account Tools</h2>
+              <span id="serverStatus">Checking</span>
+            </div>
+            <button id="syncGoogleBtn" class="tool-action" type="button">Sync Google Contacts</button>
+            <button id="syncGmailBtn" class="tool-action" type="button">Sync Gmail</button>
+            <button id="enrichBtn" class="tool-action" type="button">OpenAI Enrich</button>
+            <button id="linkedinSearchBtn" class="tool-action" type="button">LinkedIn Search</button>
+            <p class="small-copy">These run on this laptop. Secrets and contact data stay out of Git.</p>
+          </section>
+
+          <section class="panel filters">
+            <div class="panel-title">
+              <h2>Filters</h2>
+              <button id="resetFiltersBtn" class="text-button" type="button">Reset</button>
+            </div>
+            <label>
+              Organization
+              <input id="orgFilter" type="text" placeholder="e.g. USAID, UNICEF" />
+            </label>
+            <label>
+              Location
+              <input id="locationFilter" type="text" placeholder="e.g. Colombia, Nairobi" />
+            </label>
+            <label>
+              Topic
+              <input id="topicFilter" type="text" placeholder="e.g. digital health" />
+            </label>
+            <label>
+              Minimum warmth
+              <select id="warmthFilter">
+                <option value="0">Any</option>
+                <option value="1">Cold or warmer</option>
+                <option value="2">Cool or warmer</option>
+                <option value="3">Recent or warmer</option>
+                <option value="4">Active only</option>
+              </select>
+            </label>
+            <label class="check-row">
+              <input id="consentGate" type="checkbox" />
+              Hide do-not-share contacts
+            </label>
+            <label>
+              Your email aliases
+              <input id="aliasInput" type="text" placeholder="you@example.com, alias@example.org" />
+            </label>
+          </section>
+        </aside>
+
+        <section class="results-column">
+          <div class="results-head">
+            <div>
+              <h2>Shortlist</h2>
+              <p id="resultSummary">No contacts loaded yet.</p>
+            </div>
+            <div class="sort-note">Fit and warmth stay separate.</div>
+          </div>
+          <div id="resultsList" class="results-list" aria-live="polite"></div>
+        </section>
+
+        <aside class="detail-panel" id="detailPanel">
+          <div class="empty-state">
+            <h2>Evidence</h2>
+            <p>Select a person to inspect why they matched, where the signals came from, and whether they are safe to share.</p>
+          </div>
+        </aside>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

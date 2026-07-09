@@ -1,0 +1,19 @@
+{
+  "name": "network-radar",
+  "version": "0.2.0",
+  "private": false,
+  "type": "module",
+  "description": "Local-first personal network search with Google, Gmail, LinkedIn, and OpenAI enrichment.",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "check": "node --check server.mjs && node --check app.js",
+    "init-db": "node server.mjs --init-db"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.55.0"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}
