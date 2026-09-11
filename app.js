@@ -950,7 +950,6 @@ function tokenize(text) {
 function normalizeText(text) {
   return String(text || "")
     .toLowerCase()
-    .replace(/&/g, "&")
     .replace(/[^\p{L}\p{N}+#&./-]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
