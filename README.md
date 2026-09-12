@@ -127,6 +127,25 @@ Run it from `Tools` then `OpenAI Enrich`.
 
 The current enrichment prompt explicitly avoids inferring sensitive traits. You should still inspect suggested tags before using them in public-facing shortlists.
 
+## End-to-end tests
+
+The release contract covers 10 user workflows and 10 adversarial cases through
+Chromium and the running local server. Each run creates a disposable SQLite
+directory and uses local fake Google Contacts, Gmail, and OpenAI endpoints. It
+never reads the normal `data/` directory, `.env.local`, OAuth tokens, LinkedIn
+profile, Gmail metadata, or real contacts.
+
+```bash
+npm ci
+npx playwright install chromium
+npm run test:ci
+npm audit --audit-level=high
+```
+
+See [`E2E-TEST-REPORT.md`](E2E-TEST-REPORT.md) for the category ledger, defects
+found, and extension rules. A real OpenAI smoke test remains separate from CI
+and must use an explicitly authorized local key with a synthetic contact.
+
 ## Deployment Notes
 
 This is designed as a laptop tool, not a public web app.

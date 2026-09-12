@@ -57,6 +57,14 @@ OpenAI:
 - Uses a small enrichment prompt for professional tags.
 - Should not infer sensitive traits.
 
+## Test isolation
+
+The E2E harness overrides `NETWORK_RADAR_DATA_DIR` and
+`NETWORK_RADAR_EXPORT_DIR`, then routes Google, Gmail, and OpenAI requests to
+local fixture endpoints. These environment variables are test seams; normal
+local use keeps the documented `data/` and `exports/` paths and official API
+hosts.
+
 ## Why Not Public By Default
 
 The relationship graph is sensitive. A public deployment would need authentication, encryption at rest, access logs, deletion workflows, data-processing notices, connector review, and consent controls. The default version avoids that by keeping the tool on the user's machine.

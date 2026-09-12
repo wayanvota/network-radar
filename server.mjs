@@ -11,11 +11,16 @@ loadEnv(path.join(__dirname, ".env.local"));
 loadEnv(path.join(__dirname, ".env"));
 
 const PORT = Number(process.env.PORT || 5178);
-const DATA_DIR = path.join(__dirname, "data");
-const EXPORT_DIR = path.join(__dirname, "exports");
+const DATA_DIR = path.resolve(process.env.NETWORK_RADAR_DATA_DIR || path.join(__dirname, "data"));
+const EXPORT_DIR = path.resolve(process.env.NETWORK_RADAR_EXPORT_DIR || path.join(__dirname, "exports"));
 const DB_PATH = path.join(DATA_DIR, "network-radar.sqlite");
 const GOOGLE_TOKEN_PATH = path.join(DATA_DIR, "google-token.json");
 const LINKEDIN_PROFILE_DIR = path.join(DATA_DIR, "linkedin-browser-profile");
+const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
+const GOOGLE_PEOPLE_BASE_URL = (process.env.GOOGLE_PEOPLE_BASE_URL || "https://people.googleapis.com/v1").replace(/\/$/, "");
+const GMAIL_BASE_URL = (process.env.GMAIL_BASE_URL || "https://gmail.googleapis.com/gmail/v1").replace(/\/$/, "");
+const GOOGLE_TOKEN_URL = process.env.GOOGLE_TOKEN_URL || "https://oauth2.googleapis.com/token";
+const REQUEST_BODY_LIMIT = 1_000_000;
 const PUBLIC_FILES = new Set(["/", "/index.html", "/styles.css", "/app.js", "/design-concept.png"]);
 
 await fsp.mkdir(DATA_DIR, { recursive: true });
@@ -47,8 +52,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/export/public-shortlist") return exportPublicShortlist(res, url.searchParams);
     return notFound(res);
   } catch (error) {
-    console.error(error);
-    return json(res, { error: error.message }, 500);
+    if (!error.statusCode || error.statusCode >= 500) console.error(error);
+    return json(
+      res,
+      { error: error.message, code: error.code || "internal_error" },
+      error.statusCode || 500
+    );
   }
 });
 
@@ -131,7 +140,7 @@ function sourceCount(source) {
 
 function listContacts(params) {
   const q = params.get("q") || "";
-  const limit = Math.min(Number(params.get("limit") || 200), 500);
+  const limit = boundedInteger(params.get("limit"), 200, 1, 500);
   const evidenceMatches = evidenceMatchCounts(q);
   const rows = db.prepare("SELECT * FROM contacts ORDER BY updated_at DESC").all().map((row) => rowToContact(row, false));
   const scored = rows
@@ -150,9 +159,15 @@ function listContacts(params) {
 }
 
 function upsertContact(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw appError(422, "invalid_contact", "A contact object is required.");
+  }
   const contact = cleanContact(input);
-  mergeContact(contact);
-  return { contact: getContact(contact.id) };
+  if (!contact.name && !contact.emails.length && !contact.links.length) {
+    throw appError(422, "invalid_contact", "A name, email address, or profile link is required.");
+  }
+  const id = mergeContact(contact);
+  return { contact: getContact(id) };
 }
 
 function clearContacts() {
@@ -294,7 +309,7 @@ async function syncGoogleContacts() {
   let nextPageToken = "";
   let imported = 0;
   do {
-    const url = new URL("https://people.googleapis.com/v1/people/me/connections");
+    const url = new URL(`${GOOGLE_PEOPLE_BASE_URL}/people/me/connections`);
     url.searchParams.set("pageSize", "1000");
     url.searchParams.set("personFields", "names,emailAddresses,phoneNumbers,organizations,locations,biographies,urls");
     if (nextPageToken) url.searchParams.set("pageToken", nextPageToken);
@@ -312,17 +327,17 @@ async function syncGoogleContacts() {
 async function syncGmail(input = {}) {
   const token = await googleToken();
   const query = input.query || "newer_than:365d";
-  const max = Math.min(Number(input.max || 300), 2000);
+  const max = boundedInteger(input.max, 300, 1, 2000);
   let pageToken = "";
   let imported = 0;
   do {
-    const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
+    const listUrl = new URL(`${GMAIL_BASE_URL}/users/me/messages`);
     listUrl.searchParams.set("q", query);
     listUrl.searchParams.set("maxResults", String(Math.min(100, max - imported)));
     if (pageToken) listUrl.searchParams.set("pageToken", pageToken);
     const list = await googleFetch(listUrl, token);
     for (const message of list.messages || []) {
-      const detail = await googleFetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${message.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Date`, token);
+      const detail = await googleFetch(`${GMAIL_BASE_URL}/users/me/messages/${message.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Date`, token);
       for (const contact of contactsFromGmailMessage(detail)) {
         mergeContact(contact);
       }
@@ -336,17 +351,21 @@ async function syncGmail(input = {}) {
 }
 
 async function googleToken() {
-  if (!fs.existsSync(GOOGLE_TOKEN_PATH)) throw new Error("Google is not authorized. Open /auth/google/start first.");
+  if (!fs.existsSync(GOOGLE_TOKEN_PATH)) {
+    throw appError(401, "google_not_authorized", "Google is not authorized. Open /auth/google/start first.");
+  }
   const saved = JSON.parse(await fsp.readFile(GOOGLE_TOKEN_PATH, "utf8"));
   if (saved.expires_at && Date.now() < saved.expires_at - 60000) return saved.access_token;
-  if (!saved.refresh_token) throw new Error("Google token expired and has no refresh token. Reauthorize Google.");
+  if (!saved.refresh_token) {
+    throw appError(401, "google_not_authorized", "Google token expired and has no refresh token. Reauthorize Google.");
+  }
   const body = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID,
     client_secret: process.env.GOOGLE_CLIENT_SECRET,
     refresh_token: saved.refresh_token,
     grant_type: "refresh_token"
   });
-  const refreshed = await postForm("https://oauth2.googleapis.com/token", body);
+  const refreshed = await postForm(GOOGLE_TOKEN_URL, body);
   const next = {
     ...saved,
     access_token: refreshed.access_token,
@@ -379,10 +398,14 @@ async function googleCallback(params) {
   const expected = fs.existsSync(path.join(DATA_DIR, "google-oauth-state.txt"))
     ? fs.readFileSync(path.join(DATA_DIR, "google-oauth-state.txt"), "utf8")
     : "";
-  if (!expected || params.get("state") !== expected) throw new Error("Google OAuth state mismatch.");
+  if (!expected || params.get("state") !== expected) {
+    throw appError(400, "oauth_state_mismatch", "Google OAuth state mismatch.");
+  }
   const code = params.get("code");
-  if (!code) throw new Error("Google OAuth callback did not include a code.");
-  const token = await postForm("https://oauth2.googleapis.com/token", new URLSearchParams({
+  if (!code) {
+    throw appError(400, "oauth_code_missing", "Google OAuth callback did not include a code.");
+  }
+  const token = await postForm(GOOGLE_TOKEN_URL, new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID,
     client_secret: process.env.GOOGLE_CLIENT_SECRET,
     code,
@@ -398,7 +421,9 @@ async function googleCallback(params) {
 
 async function linkedinSearch(input = {}) {
   const query = input.query || "";
-  if (!query.trim()) throw new Error("LinkedIn search query required.");
+  if (!query.trim()) {
+    throw appError(422, "invalid_linkedin_query", "LinkedIn search query required.");
+  }
   let playwright;
   try {
     playwright = await import("playwright");
@@ -446,8 +471,10 @@ async function linkedinSearch(input = {}) {
 }
 
 async function enrichContacts(input = {}) {
-  if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured.");
-  const limit = Math.min(Number(input.limit || 20), 100);
+  if (!process.env.OPENAI_API_KEY) {
+    throw appError(503, "openai_not_configured", "OPENAI_API_KEY is not configured.");
+  }
+  const limit = boundedInteger(input.limit, 20, 1, 100);
   const contacts = db.prepare("SELECT * FROM contacts ORDER BY updated_at DESC LIMIT ?").all(limit).map(rowToContact);
   let enriched = 0;
   for (const contact of contacts) {
@@ -460,7 +487,7 @@ async function enrichContacts(input = {}) {
 }
 
 async function embed(text) {
-  const response = await fetch("https://api.openai.com/v1/embeddings", {
+  const response = await fetch(`${OPENAI_BASE_URL}/embeddings`, {
     method: "POST",
     headers: openaiHeaders(),
     body: JSON.stringify({
@@ -468,13 +495,15 @@ async function embed(text) {
       input: text.slice(0, 12000)
     })
   });
-  if (!response.ok) throw new Error(`OpenAI embedding failed: ${response.status} ${await response.text()}`);
+  if (!response.ok) {
+    throw appError(response.status, "openai_embedding_failed", `OpenAI embedding failed: ${response.status}`);
+  }
   const data = await response.json();
   return data.data?.[0]?.embedding || [];
 }
 
 async function suggestTags(contact) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetch(`${OPENAI_BASE_URL}/responses`, {
     method: "POST",
     headers: openaiHeaders(),
     body: JSON.stringify({
@@ -489,10 +518,13 @@ async function suggestTags(contact) {
       text: { format: { type: "json_object" } }
     })
   });
-  if (!response.ok) throw new Error(`OpenAI enrichment failed: ${response.status} ${await response.text()}`);
+  if (!response.ok) {
+    throw appError(response.status, "openai_enrichment_failed", `OpenAI enrichment failed: ${response.status}`);
+  }
   const data = await response.json();
   const raw = data.output_text || data.output?.flatMap((o) => o.content || []).map((c) => c.text).join("") || "{}";
-  return parseJson(raw, { tags: [] }).tags || [];
+  const tags = parseJson(raw, { tags: [] }).tags;
+  return Array.isArray(tags) ? unique(tags).slice(0, 12) : [];
 }
 
 function openaiHeaders() {
@@ -653,20 +685,20 @@ function cleanContact(input) {
   const contact = {
     id: input.id || "",
     name: String(input.name || "").trim(),
-    emails: unique((input.emails || []).flatMap(extractEmails)),
-    phones: unique(input.phones || []),
-    orgs: unique(input.orgs || []),
-    titles: unique(input.titles || []),
-    locations: unique(input.locations || []),
-    links: unique(input.links || []),
+    emails: unique(asArray(input.emails).flatMap(extractEmails)),
+    phones: unique(asArray(input.phones)),
+    orgs: unique(asArray(input.orgs)),
+    titles: unique(asArray(input.titles)),
+    locations: unique(asArray(input.locations)),
+    links: unique(asArray(input.links)),
     bio: String(input.bio || "").trim(),
     notes: String(input.notes || "").trim(),
-    tags: unique(input.tags || []),
+    tags: unique(asArray(input.tags)),
     sources: { google: false, gmail: false, linkedin: false, ...(input.sources || {}) },
     consent: input.consent || "unknown",
     warmth: { ...defaultWarmth(), ...(input.warmth || {}) },
-    embedding: input.embedding || [],
-    evidence: input.evidence || [],
+    embedding: Array.isArray(input.embedding) ? input.embedding : [],
+    evidence: Array.isArray(input.evidence) ? input.evidence : [],
     shortlisted: Boolean(input.shortlisted)
   };
   contact.tags = unique([...contact.tags, ...inferTags(contact)]);
@@ -738,7 +770,11 @@ async function postForm(url, body) {
 
 function requireGoogleConfig() {
   if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-    throw new Error("Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env.local first.");
+    throw appError(
+      503,
+      "google_not_configured",
+      "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env.local first."
+    );
   }
 }
 
@@ -765,9 +801,21 @@ function serveStatic(res, pathname) {
 
 async function readJson(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let bytes = 0;
+  for await (const chunk of req) {
+    bytes += chunk.length;
+    if (bytes > REQUEST_BODY_LIMIT) {
+      throw appError(413, "request_too_large", "Request body is larger than 1 MB.");
+    }
+    chunks.push(chunk);
+  }
   const text = Buffer.concat(chunks).toString("utf8");
-  return text ? JSON.parse(text) : {};
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw appError(400, "invalid_json", "Request body must be valid JSON.");
+  }
 }
 
 function redirect(res, location) {
@@ -843,8 +891,27 @@ function toCsv(rows) {
 }
 
 function csvCell(value) {
-  const text = String(value ?? "");
+  let text = String(value ?? "");
+  if (/^[=+\-@]/.test(text)) text = `'${text}`;
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function asArray(value) {
+  if (Array.isArray(value)) return value;
+  return value == null || value === "" ? [] : [value];
+}
+
+function boundedInteger(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(number)));
+}
+
+function appError(statusCode, code, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
 }
 
 function unique(values) {
