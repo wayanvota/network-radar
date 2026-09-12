@@ -9,12 +9,17 @@
     "dev": "node server.mjs",
     "check": "node --check server.mjs && node --check app.js",
     "init-db": "node server.mjs --init-db",
-    "import:linkedin": "node scripts/import-linkedin.mjs"
+    "import:linkedin": "node scripts/import-linkedin.mjs",
+    "test:e2e": "playwright test",
+    "test:ci": "npm run check && npm run test:e2e"
   },
   "optionalDependencies": {
     "playwright": "^1.55.0"
   },
   "engines": {
     "node": ">=22.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
   }
 }
